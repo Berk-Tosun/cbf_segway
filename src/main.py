@@ -82,7 +82,7 @@ while p.isConnected():
 
     # torque control
     # ---------------------------------------------------
-    if time_elapsed > 1:
+    if time_elapsed > 1.5:
         p.setJointMotorControl2(
                 bodyUniqueId=robot_id,
                 jointIndex=joint_name2id["w1_joint"],
