@@ -56,7 +56,7 @@ ptchs_dot = []
 prev_pitch = None
 time_elapsed = 0
 # while p.isConnected():
-while time_elapsed < 8:
+while time_elapsed < 15:
     position, orientation = p.getBasePositionAndOrientation(robot_id)
     x, y, z = position
     roll, pitch, yaw = p.getEulerFromQuaternion(orientation)
@@ -127,6 +127,8 @@ axs[1, 1].set_title("States (Phase plane)")
 axs[1, 1].set_xlabel("Pitch")
 axs[1, 1].set_ylabel("Pitch dot")
 axs[1, 1].grid()
+axs[1, 1].axhline(color='black')
+axs[1, 1].axvline(color='black')
 
 plt.tight_layout()
 plt.show()
