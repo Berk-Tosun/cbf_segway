@@ -1,12 +1,118 @@
 import pybullet as p
 import pybullet_data
+
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 
 import time
 import pathlib
 
+#####################################################
+# Define dynamics
+
+""" 
+The segway could be modeled as an inverted pendulum on cart.
+
+Verified with:
+https://ocw.mit.edu/courses/mechanical-engineering/2-003sc-engineering-dynamics-fall-2011/lagrange-equations/MIT2_003SCF11_rec8notes1.pdf
+
+Full nonlinear dynamics are obtained with lagrangian.
+2-dof; generalized coords, q = {x, theta}
+
+1st eom: (q = x)
+    x_ddot * (m1+m2) + 1/2 * m2 * l * theta_ddot * cos(theta) 
+        - 1/2 * m2 * l * theta_dot**2 * sin(theta) = u
+
+2nd eom: (q = theta)
+    theta_ddot * (m2 * l**2 / 4 + I_G) + 1/2 * m2 * x_ddot * l * cos(theta)
+        + 1/2 * m2 * g * l * sin(theta) = 0
+
+define x = [x, x_dot, theta, theta_dot]
+"""
+
+
+# Writing in the simplest form, replace pendulum with simple pendulum
+# and linearize; taken from Ogata's book (Modern Control - modelling chapter).
+# m1: cart mass
+# m2: mass at the end of pendulum
+# l: length of pendulum
+
+import control
+
+import numpy as np
+from scipy import integrate
+import matplotlib.pyplot as plt
+
+# ## Ogata
+# def get_ss_A(m1, m2, l, g=-9.807):
+#     return [
+#         [0, 1, 0, 0],
+#         [0, 0, m2 * g /m1, 0],
+#         [0, 0, 0, 1],
+#         [0, 0, -(m1 + m2) * g / (m1*l), 0]
+#     ]
+
+# def get_ss_B(m1, l):
+#     return [0, 1/m1, 0, 1/(m1 * l)]
+
+## Steve Brunton ~ adds damping on wheels
+def get_ss_A(m1, m2, l, d=1, pendulum_up=True, g=-9.807):
+    b = 1 if pendulum_up else -1
+    return [
+        [0, 1, 0, 0],
+        [0, -d/m1, b*m2*g/m1, 0],
+        [0, 0, 0, 1],
+        [0, -b*d/(m1*l), -b*(m1+m2)*g/(m1*l), 0]
+    ]
+
+def get_ss_B(m1, l, pendulum_up=True):
+    b = 1 if pendulum_up else -1
+    return [0, 1/m1, 0, b/(m1 * l)]
+
+m1 = 2
+m2 = 1
+l = 85.4 / 2 * 0.01  # m
+wheel_dia = 0.39 # m
+
+A = get_ss_A(m1, m2, l)
+B = get_ss_B(m1, l)
+C = [
+    [1, 0, 0, 0],
+    [0, 0, 1, 0]
+]
+
+model_plant = control.ss(A, B, C, 0)
+
+Q = np.zeros((4, 4))
+np.fill_diagonal(Q, [1, 1, 1, 1])
+R = 100
+
+K_lqr, _, _ = control.lqr(model_plant, Q, R)
+
+"""
+# It is possible to write the full non-linear form as well.
+# (need to modify the equations by eliminating x_ddot and theta_ddot.)
+# Available in steven brunton -> code:matlab -> chapter 8 (?)
+
+def get_drift_term(m1, m2, l, I_G, g):
+    def f(x): # x = [x, x_dot, theta, theta_dot]
+        return [
+            [0, 1, 0, 0],
+            [0, 0, 1/2 * m2 * l * x[3]**2 * np.sin(x[2]), 1/2 * m2 * l * x_ddot * np.cos(x[2])] / (m1+m2),
+            [0, 0, 0, 1],
+            []
+        ]
+    return f
+
+model_plant = control.NonlinearIOSystem(get_drift_term(), ...)
+"""
+
+#####################################################
+# Set up simulation
+
 dt = 1/240
+
 
 p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -14,86 +120,96 @@ p.resetSimulation()
 
 p.loadURDF('plane.urdf')
 
-cubeStartPos = [0, 0, 1.13]
-cubeStartOrientation = p.getQuaternionFromEuler([0., 0, 0])
+robots = []
+
+start_pos = [0, 0, 0.3]
+start_orientation = p.getQuaternionFromEuler([0., 0, 0])
 urdf_file = pathlib.Path("./URDF/cyberpod.urdf")
-robot_id = p.loadURDF(urdf_file.absolute().as_posix(), cubeStartPos, 
-    cubeStartOrientation)
+robot_0 = p.loadURDF(urdf_file.absolute().as_posix(), start_pos, 
+    start_orientation)
+robots.append(robot_0)
+
+start_pos = [0, 2, 0.3]
+start_orientation = p.getQuaternionFromEuler([0., 0, 0])
+urdf_file = pathlib.Path("./URDF/cyberpod.urdf")
+robot_1 = p.loadURDF(urdf_file.absolute().as_posix(), start_pos, 
+    start_orientation)
+robots.append(robot_1)
 
 p.setGravity(0, 0, -9.807)
 p.setTimeStep(dt)
 
 joint_name2id = {}
-for i in range(p.getNumJoints(robot_id)):
-    joint_info = p.getJointInfo(robot_id, i)
+for i in range(p.getNumJoints(robot_0)):
+    joint_info = p.getJointInfo(robot_0, i)
     joint_name2id[joint_info[1].decode('UTF-8')] = joint_info[0]
 
 # enable torque control
-max_force = 0
-for joint_id in joint_name2id.values():
-    p.setJointMotorControl2(
-            bodyUniqueId=robot_id,
-            jointIndex=joint_id,
-            controlMode=p.VELOCITY_CONTROL, 
-            force=max_force)
-torque_target = 0
-torque_limit = 0.3
 
-# aim to stabilize pitch
+max_force = 0
+for robot in robots:
+    for joint_id in joint_name2id.values():
+        p.setJointMotorControl2(
+                bodyUniqueId=robot,
+                jointIndex=joint_id,
+                controlMode=p.VELOCITY_CONTROL, 
+                force=max_force)
+torque_target = 0
+torque_limit = 2
+# torque_limit = 0.3
+
+# A simple PD controller manually tuned by testing. 
+# It aims to stabilize the pitch.
 target_pitch = 0
-k_p = 0.2
+k_p = 0.3
 k_d = 0.1
 # k_d = 1e-6
 
 trqs_target = []
+trqs_target_nom = []
 trqs_applied = []
-trqs_kp = []
-trqs_kd = []
 
 ptchs = []
 ptchs_dot = []
 
 prev_pitch = None
-time_elapsed = 0
+time_elapsed = 0.
 # while p.isConnected():
-while time_elapsed < 15:
-    position, orientation = p.getBasePositionAndOrientation(robot_id)
-    x, y, z = position
-    roll, pitch, yaw = p.getEulerFromQuaternion(orientation)
+while time_elapsed < 2:
+    for robot in robots:
+        position, orientation = p.getBasePositionAndOrientation(robot)
+        x, y, z = position
+        roll, pitch, yaw = p.getEulerFromQuaternion(orientation)
 
-    # if prev_pitch == None:
-    #     prev_pitch = pitch
-    #     pitch_dot = 0
-    # else:
-    #     pitch_dot = (pitch - prev_pitch) / dt
-    #     prev_pitch = pitch
-    _, ang_vel_base = p.getBaseVelocity(robot_id)
-    pitch_dot = ang_vel_base[1]
+        lin_vel_base, ang_vel_base = p.getBaseVelocity(robot)
+        x_dot = lin_vel_base[0] * np.cos(yaw) + lin_vel_base[1] * np.sin(yaw) # (?)
+        pitch_dot = ang_vel_base[1]
 
-    torque_target_kp = k_p * (pitch - target_pitch)
-    torque_target_kd = k_d * pitch_dot
-    torque_target = torque_target_kp + torque_target_kd 
-    torque_applied = np.clip(torque_target, -torque_limit, torque_limit)
+        ## lqr designed with linearized model
+        force_cart = K_lqr @ [x, x_dot, pitch, pitch_dot]
+        torque_target_nom = force_cart * wheel_dia / 2
+        torque_target_nom = torque_target_nom / 2 # we have 2 identical wheels
 
-    trqs_target.append(torque_target)
-    trqs_applied.append(torque_applied)
-    
-    trqs_kp.append(torque_target_kp)
-    trqs_kd.append(torque_target_kd)
+        torque_target = torque_target_nom    
+        torque_applied = np.clip(torque_target, -torque_limit, torque_limit)
 
-    ptchs.append(pitch)
-    ptchs_dot.append(pitch_dot)
+        trqs_target.append(torque_target)
+        trqs_target_nom.append(torque_target_nom)
+        trqs_applied.append(torque_applied)
+        
+        ptchs.append(pitch)
+        ptchs_dot.append(pitch_dot)
 
-    p.setJointMotorControl2(
-            bodyUniqueId=robot_id,
-            jointIndex=joint_name2id["w1_joint"],
-            controlMode=p.TORQUE_CONTROL, 
-            force=torque_applied)
-    p.setJointMotorControl2(
-            bodyUniqueId=robot_id,
-            jointIndex=joint_name2id["w2_joint"],
-            controlMode=p.TORQUE_CONTROL, 
-            force=torque_applied)
+        p.setJointMotorControl2(
+                bodyUniqueId=robot,
+                jointIndex=joint_name2id["w1_joint"],
+                controlMode=p.TORQUE_CONTROL, 
+                force=torque_applied)
+        p.setJointMotorControl2(
+                bodyUniqueId=robot,
+                jointIndex=joint_name2id["w2_joint"],
+                controlMode=p.TORQUE_CONTROL, 
+                force=torque_applied)
 
     p.stepSimulation()
     time_elapsed += dt
@@ -101,35 +217,53 @@ while time_elapsed < 15:
     # if time_elapsed % 0.2 < 0.01:
     #     print(roll, pitch, yaw)     
 
-_, axs = plt.subplots(2, 2)
-t = np.linspace(0, time_elapsed, len(trqs_applied)) 
 
-axs[0, 0].plot(t, np.array(trqs_applied), label='applied')
-axs[0, 0].plot(t, np.array(trqs_target), "--", label='target')
-axs[0, 0].set_title("Joint Torque")
-axs[0, 0].set_xlabel("time")
-axs[0, 0].legend()
+#####################################################
+# Results
 
-axs[0, 1].plot(t, trqs_kp, label="k_p")
-axs[0, 1].plot(t, trqs_kd, "--", label="k_d")
-axs[0, 1].set_title("Controller Contributions")
-axs[0, 1].set_xlabel("time")
-axs[0, 1].legend()
+trqs_target = np.array(trqs_target).reshape(-1, len(robots))
+trqs_target_nom = np.array(trqs_target_nom).reshape(-1, len(robots)) 
+trqs_applied = np.array(trqs_applied).reshape(-1, len(robots))
 
-axs[1, 0].plot(t, ptchs, label="pitch")
-axs[1, 0].plot(t, ptchs_dot, "--", label="pitch dot")
-axs[1, 0].set_title("States")
-axs[1, 0].set_xlabel("time")
-axs[1, 0].legend()
+ptchs =  np.array(ptchs).reshape(-1, len(robots))
+ptchs_dot = np.array(ptchs_dot).reshape(-1, len(robots))
 
-axs[1, 1].scatter(ptchs, ptchs_dot, c=t)
-axs[1, 1].set_title("States (Phase plane)")
-axs[1, 1].set_xlabel("Pitch")
-axs[1, 1].set_ylabel("Pitch dot")
-axs[1, 1].grid()
-axs[1, 1].axhline(color='black')
-axs[1, 1].axvline(color='black')
+for robot_no, _ in enumerate(robots):
+    fig = plt.figure(f'{robot_no=}')
 
-plt.tight_layout()
+    t = np.linspace(0, time_elapsed, len(trqs_applied[:, robot_no])) 
+
+    ax0 = fig.add_subplot(2, 1, 1)
+    ax0.plot(t, trqs_applied[:, robot_no], alpha=0.7, label='applied')
+    ax0.plot(t, trqs_target[:, robot_no], alpha=0.7, label='target:safe')
+    ax0.plot(t, trqs_target_nom[:, robot_no], "--", alpha=0.7,
+        label='target:nominal')
+    ax0.set_title("Joint Torque")
+    ax0.set_xlabel("time")
+    ax0.legend()
+    ax0.grid(True)
+
+    ax1 = fig.add_subplot(2, 2, 3)
+    ax1.plot(t, ptchs[:, robot_no], label="pitch")
+    ax1.plot(t, ptchs_dot[:, robot_no], "--", label="pitch dot")
+    ax1.set_title("States")
+    ax1.set_xlabel("time")
+    ax1.legend()
+    ax1.grid(True)
+
+    ax2 = fig.add_subplot(2, 2, 4)
+    ax2_plt = ax2.scatter(ptchs[:, robot_no], ptchs_dot[:, robot_no], c=t, alpha=0.2)
+    ax2.set_title("States (Phase plane)")
+    ax2.set_xlabel("Pitch")
+    ax2.set_ylabel("Pitch dot")
+    ax2.grid(True)
+    ax2.axhline(color='black')
+    ax2.axvline(color='black')
+    divider = make_axes_locatable(ax2)
+    cax = divider.append_axes('right', size='5%', pad=0.05)
+    cbar = fig.colorbar(ax2_plt, cax=cax, orientation='vertical')
+    cbar.set_label('Time')
+
+    plt.tight_layout()
 plt.show()
 

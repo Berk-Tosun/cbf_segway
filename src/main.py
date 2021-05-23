@@ -41,7 +41,7 @@ for joint_id in joint_name2id.values():
             force=max_force)
 const_torque = 0.1
 
-time_elapsed = 0
+time_elapsed = 0.
 
 while p.isConnected():
     position, orientation = p.getBasePositionAndOrientation(robot_id)
