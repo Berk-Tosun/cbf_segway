@@ -4,6 +4,8 @@ import pybullet_data
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
+import cvxopt
+import control
 
 import time
 import pathlib
@@ -165,6 +167,74 @@ k_p = 0.3
 k_d = 0.1
 # k_d = 1e-6
 
+#####################################################
+# Safety-critical control
+
+
+def cbf(pitch):
+    """ 
+    h should be designed such that h > 0 corresponds to safe states.
+    In this case limit the pitch angle to a range. 
+    """
+    allowable_deviation = np.pi / 12
+    if pitch < 0:
+        return -1 * pitch + allowable_deviation
+    else:
+       return pitch - allowable_deviation
+
+def cbf_dot(pitch, pitch_dot):
+    if pitch < 0:
+        return -1 * pitch_dot
+    else:
+        return pitch_dot
+
+# def get_A():
+#     return
+
+# def get_b():
+#     return
+
+def asif(nominal_control):
+    """
+    Active Set Invariance Filter implementation of cbf.
+    Recall CBF formulation:
+
+    Given function h, which is denoting safety (h(x) >= 0 is safe)
+    Set invariance (or safety) can be achived by:
+
+        Nagumo's theorem: (works on boundary of safe set)
+            h_dot(x) >= 0
+
+        CBF: (introduce controller and extend to whole set)
+            h_dot(x, u) >= -gamma * h(x)
+
+    Back to ASIF: minimally invasive control filtering; to do so
+    it solves the following optimization problem:
+
+        argmin || u - u_des ||**2
+        s.t. A_ij <= b_ij forAll i =/= j
+
+    Use qp to solve it. Reformulate the problem to match the standart form:
+
+        min (1/2) * x.T @ P @ x + q.T @ x
+        s.t. Gx <= h  
+    """
+    return nominal_control
+
+    ## Following is more suitable for exponential cbf
+    # P = cvxopt.matrix(np.eyes(2), tc='d')
+    # q = cvxopt.matrix(-1 * nominal_control, tc='d')
+    # G = cvxopt.matrix(get_A(), tc='d')
+    # h = cvxopt.matrix(get_b(), tc='d')
+
+    # cvxopt.solvers.options['show_progress'] = False
+    # sol = cvxopt.solvers.qp(P, q, G, h)
+
+    # return sol['x']
+
+#####################################################
+# Simulation
+
 trqs_target = []
 trqs_target_nom = []
 trqs_applied = []
@@ -190,7 +260,7 @@ while time_elapsed < 2:
         torque_target_nom = force_cart * wheel_dia / 2
         torque_target_nom = torque_target_nom / 2 # we have 2 identical wheels
 
-        torque_target = torque_target_nom    
+        torque_target = asif(torque_target_nom)    
         torque_applied = np.clip(torque_target, -torque_limit, torque_limit)
 
         trqs_target.append(torque_target)
