@@ -40,12 +40,6 @@ define x = [x, x_dot, theta, theta_dot]
 # m2: mass at the end of pendulum
 # l: length of pendulum
 
-import control
-
-import numpy as np
-from scipy import integrate
-import matplotlib.pyplot as plt
-
 # ## Ogata
 # def get_ss_A(m1, m2, l, g=-9.807):
 #     return [
