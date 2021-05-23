@@ -68,7 +68,7 @@ def get_ss_B(m1, l, pendulum_up=True):
 
 m1 = 2
 m2 = 1
-l = 85.4 / 2 * 0.01  # m
+l = 0.427 # 85.4 / 2 * 0.01  # m
 wheel_dia = 0.39 # m
 
 A = get_ss_A(m1, m2, l)
@@ -118,26 +118,19 @@ p.loadURDF('plane.urdf')
 
 robots = []
 
-start_pos = [0, 0, 0.3]
-start_orientation = p.getQuaternionFromEuler([0., 0, 0])
-urdf_file = pathlib.Path("./URDF/cyberpod.urdf")
-robot_0 = p.loadURDF(urdf_file.absolute().as_posix(), start_pos, 
-    start_orientation)
-robots.append(robot_0)
-
-start_pos = [0, 2, 0.3]
-start_orientation = p.getQuaternionFromEuler([0., 0, 0])
-urdf_file = pathlib.Path("./URDF/cyberpod.urdf")
-robot_1 = p.loadURDF(urdf_file.absolute().as_posix(), start_pos, 
-    start_orientation)
-robots.append(robot_1)
+for i in range(3):
+    start_pos = [0, 0 + 2*i, 0.3]
+    start_orientation = p.getQuaternionFromEuler([0., 0, 0])
+    urdf_file = pathlib.Path("./URDF/cyberpod.urdf")
+    robots.append(p.loadURDF(urdf_file.absolute().as_posix(), start_pos, 
+        start_orientation))
 
 p.setGravity(0, 0, -9.807)
 p.setTimeStep(dt)
 
 joint_name2id = {}
-for i in range(p.getNumJoints(robot_0)):
-    joint_info = p.getJointInfo(robot_0, i)
+for i in range(p.getNumJoints(robots[0])):
+    joint_info = p.getJointInfo(robots[0], i)
     joint_name2id[joint_info[1].decode('UTF-8')] = joint_info[0]
 
 # enable torque control
@@ -239,8 +232,8 @@ ptchs_dot = []
 prev_pitch = None
 time_elapsed = 0.
 # while p.isConnected():
-while time_elapsed < 2:
-    for robot in robots:
+while time_elapsed < 7:
+    for robot_no, robot in enumerate(robots):
         position, orientation = p.getBasePositionAndOrientation(robot)
         x, y, z = position
         roll, pitch, yaw = p.getEulerFromQuaternion(orientation)
@@ -249,12 +242,26 @@ while time_elapsed < 2:
         x_dot = lin_vel_base[0] * np.cos(yaw) + lin_vel_base[1] * np.sin(yaw) # (?)
         pitch_dot = ang_vel_base[1]
 
+        if 1 < time_elapsed < 1.03:
+            force = [120,0,0]
+            p.applyExternalForce(robot, -1, force, position,
+                # flags=p.LINK_FRAME)
+                flags=p.WORLD_FRAME)
+
         ## lqr designed with linearized model
         force_cart = K_lqr @ [x, x_dot, pitch, pitch_dot]
         torque_target_nom = force_cart * wheel_dia / 2
         torque_target_nom = torque_target_nom / 2 # we have 2 identical wheels
 
-        torque_target = asif(torque_target_nom)    
+        if robot_no == 0:
+            torque_target_nom = 0
+            torque_target = 0
+        elif robot_no == 1:
+            torque_target = torque_target_nom
+        elif robot_no == 2:
+            torque_target = asif(torque_target_nom)
+        else:
+            raise RuntimeError('Undefined robot')    
         torque_applied = np.clip(torque_target, -torque_limit, torque_limit)
 
         trqs_target.append(torque_target)
